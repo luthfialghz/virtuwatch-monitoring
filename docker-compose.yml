@@ -5,8 +5,6 @@ services:
     build: .
     container_name: ip-monitoring-system
     restart: always
-    env_file:
-      - .env
     environment:
       - TARGET_IP=${TARGET_IP}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
