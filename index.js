@@ -3,15 +3,21 @@ const axios = require('axios');
 require('dotenv').config();
 
 // --- CONFIGURATION FROM ENV ---
-const TARGET_IP = process.env.TARGET_IP;
+const TARGET_IP_STRING = process.env.TARGET_IP || '';
+const TARGET_HOSTS = TARGET_IP_STRING.split(',').map(s => s.trim()).filter(s => s !== '');
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
-const PING_INTERVAL = parseInt(process.env.PING_INTERVAL);
-const LATENCY_THRESHOLD = parseInt(process.env.LATENCY_THRESHOLD);
+const PING_INTERVAL = parseInt(process.env.PING_INTERVAL) || 30000;
+const LATENCY_THRESHOLD = parseInt(process.env.LATENCY_THRESHOLD) || 150;
+const FAILURE_THRESHOLD = parseInt(process.env.FAILURE_THRESHOLD) || 3; // Alert only after X failures
+const DELAY_BETWEEN_HOSTS = parseInt(process.env.DELAY_BETWEEN_HOSTS) || 1000; // Delay in ms to avoid "bruteforce" detection
 // -----------------------------
 
-let lastStatus = 'ONLINE'; // Track previous status to avoid spamming
+const lastStatuses = {}; // Track previous status per host
+const failureCounts = {}; // Track consecutive failures per host
 
-async function sendDiscordAlert(title, message, color = 16711680) { // Default color Red
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function sendDiscordAlert(host, title, message, color = 16711680) {
     if (!DISCORD_WEBHOOK_URL) {
         console.warn('Discord Webhook URL not configured in .env file. Alert skipped.');
         return;
@@ -22,7 +28,7 @@ async function sendDiscordAlert(title, message, color = 16711680) { // Default c
             embeds: [
                 {
                     title: `🚨 ${title}`,
-                    description: message,
+                    description: `**Target: ${host}**\n${message}`,
                     color: color,
                     timestamp: new Date().toISOString(),
                     footer: {
@@ -31,49 +37,68 @@ async function sendDiscordAlert(title, message, color = 16711680) { // Default c
                 }
             ]
         });
-        console.log('Discord notification sent.');
+        console.log(`Discord notification sent for ${host}.`);
     } catch (error) {
-        console.error('Failed to send Discord alert:', error.message);
+        console.error(`Failed to send Discord alert for ${host}:`, error.message);
     }
 }
 
-async function monitorIP() {
-    console.log(`[${new Date().toLocaleTimeString()}] Monitoring IP: ${TARGET_IP}...`);
+async function monitorHost(host) {
+    if (!lastStatuses[host]) lastStatuses[host] = 'ONLINE';
+    if (failureCounts[host] === undefined) failureCounts[host] = 0;
 
     try {
-        const res = await ping.promise.probe(TARGET_IP, {
+        const res = await ping.promise.probe(host, {
             timeout: 10,
         });
 
         if (!res.alive) {
-            if (lastStatus !== 'RTO') {
-                await sendDiscordAlert('IP Address Down (RTO)', `Target: ${TARGET_IP} is currently unreachable (Request Time Out).`);
-                lastStatus = 'RTO';
+            failureCounts[host]++;
+            console.log(`[${new Date().toLocaleTimeString()}] [${host}] STATUS: RTO (Failure ${failureCounts[host]}/${FAILURE_THRESHOLD})`);
+            
+            if (failureCounts[host] >= FAILURE_THRESHOLD) {
+                if (lastStatuses[host] !== 'RTO') {
+                    await sendDiscordAlert(host, 'Host Down (RTO)', `Host is currently unreachable (Request Time Out). Reported after ${failureCounts[host]} consecutive failures.`);
+                    lastStatuses[host] = 'RTO';
+                }
             }
-            console.log(`[${new Date().toLocaleTimeString()}] STATUS: RTO`);
         } else {
             const latency = parseFloat(res.time);
-            console.log(`[${new Date().toLocaleTimeString()}] STATUS: ONLINE | Latency: ${latency}ms`);
+            const wasDown = lastStatuses[host] !== 'ONLINE';
+            
+            // Optimization: Only clear failure count and log if it was failing or latency is normal
+            if (failureCounts[host] > 0 || wasDown || latency > LATENCY_THRESHOLD) {
+                console.log(`[${new Date().toLocaleTimeString()}] [${host}] STATUS: ONLINE | Latency: ${latency}ms`);
+            }
 
             if (latency > LATENCY_THRESHOLD) {
-                if (lastStatus !== 'HIGH_PING') {
-                    await sendDiscordAlert('High Latency Alert', `High ping detected on ${TARGET_IP}: **${latency}ms** (Threshold: ${LATENCY_THRESHOLD}ms)`, 16776960); // Yellow
-                    lastStatus = 'HIGH_PING';
+                if (lastStatuses[host] !== 'HIGH_PING') {
+                    await sendDiscordAlert(host, 'High Latency Alert', `High ping detected: **${latency}ms** (Threshold: ${LATENCY_THRESHOLD}ms)`, 16776960);
+                    lastStatuses[host] = 'HIGH_PING';
                 }
             } else {
-                if (lastStatus !== 'ONLINE') {
-                    await sendDiscordAlert('Connection Restored', `Connection to ${TARGET_IP} is back to normal. Current Ping: **${latency}ms**`, 65280); // Green
-                    lastStatus = 'ONLINE';
+                if (wasDown) {
+                    await sendDiscordAlert(host, 'Connection Restored', `Connection to ${host} is back to normal. Current Ping: **${latency}ms**`, 65280);
+                    lastStatuses[host] = 'ONLINE';
                 }
             }
+            failureCounts[host] = 0; // Reset failure count on successful ping
         }
     } catch (error) {
-        console.error('Error during ping monitoring:', error);
+        console.error(`Error during monitoring for ${host}:`, error);
+    }
+}
+
+async function monitorAll() {
+    console.log(`[${new Date().toLocaleTimeString()}] Starting monitoring cycle for ${TARGET_HOSTS.length} targets...`);
+    for (const host of TARGET_HOSTS) {
+        await monitorHost(host);
+        if (TARGET_HOSTS.length > 1) await sleep(DELAY_BETWEEN_HOSTS);
     }
 }
 
 // Initial Run
-monitorIP();
+monitorAll();
 
 // Schedule Monitoring
-setInterval(monitorIP, PING_INTERVAL);
+setInterval(monitorAll, PING_INTERVAL);
