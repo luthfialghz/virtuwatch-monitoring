@@ -24,6 +24,7 @@ async function sendDiscordAlert(host, title, message, color = 16711680) {
     }
 
     try {
+        console.log(`[${new Date().toLocaleTimeString()}] Sending Discord alert for ${host}: ${title}...`);
         await axios.post(DISCORD_WEBHOOK_URL, {
             embeds: [
                 {
@@ -37,9 +38,9 @@ async function sendDiscordAlert(host, title, message, color = 16711680) {
                 }
             ]
         });
-        console.log(`Discord notification sent for ${host}.`);
+        console.log(`[${new Date().toLocaleTimeString()}] ✅ Discord notification sent successfully for ${host}.`);
     } catch (error) {
-        console.error(`Failed to send Discord alert for ${host}:`, error.message);
+        console.error(`[${new Date().toLocaleTimeString()}] ❌ Failed to send Discord alert for ${host}:`, error.response?.data || error.message);
     }
 }
 
@@ -66,10 +67,8 @@ async function monitorHost(host) {
             const latency = parseFloat(res.time);
             const wasDown = lastStatuses[host] !== 'ONLINE';
             
-            // Optimization: Only clear failure count and log if it was failing or latency is normal
-            if (failureCounts[host] > 0 || wasDown || latency > LATENCY_THRESHOLD) {
-                console.log(`[${new Date().toLocaleTimeString()}] [${host}] STATUS: ONLINE | Latency: ${latency}ms`);
-            }
+            // Ensure all results are logged every cycle
+            console.log(`[${new Date().toLocaleTimeString()}] [${host}] STATUS: ONLINE | Latency: ${latency}ms`);
 
             if (latency > LATENCY_THRESHOLD) {
                 if (lastStatuses[host] !== 'HIGH_PING') {
