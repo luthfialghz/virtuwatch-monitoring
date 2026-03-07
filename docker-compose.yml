@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  ip-monitor:
+    build: .
+    container_name: ip-monitoring-system
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - TARGET_IP=${TARGET_IP}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - PING_INTERVAL=${PING_INTERVAL}
+      - LATENCY_THRESHOLD=${LATENCY_THRESHOLD}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
